@@ -300,11 +300,20 @@ func ValidateSendVideo(ctx context.Context, request domainSend.VideoRequest) err
 }
 
 func ValidateSendContact(ctx context.Context, request domainSend.ContactRequest) error {
-	err := validation.ValidateStructWithContext(ctx, &request,
+	fields := []*validation.FieldRules{
 		validation.Field(&request.Phone, validation.Required),
-		validation.Field(&request.ContactPhone, validation.Required),
-		validation.Field(&request.ContactName, validation.Required),
-	)
+	}
+	// A complete vCard already carries the name and phone numbers, so the
+	// separate ContactName/ContactPhone fields are only required when the
+	// vCard is generated from them.
+	if strings.TrimSpace(request.VCard) == "" {
+		fields = append(fields,
+			validation.Field(&request.ContactPhone, validation.Required),
+			validation.Field(&request.ContactName, validation.Required),
+		)
+	}
+
+	err := validation.ValidateStructWithContext(ctx, &request, fields...)
 
 	if err != nil {
 		return pkgError.ValidationError(err.Error())
@@ -316,8 +325,10 @@ func ValidateSendContact(ctx context.Context, request domainSend.ContactRequest)
 	}
 
 	// Custom validation for contact phone number format
-	if err := validatePhoneNumber(request.ContactPhone); err != nil {
-		return pkgError.ValidationError("contact " + err.Error())
+	if strings.TrimSpace(request.VCard) == "" {
+		if err := validatePhoneNumber(request.ContactPhone); err != nil {
+			return pkgError.ValidationError("contact " + err.Error())
+		}
 	}
 
 	if err := validateDuration(request.Duration); err != nil {

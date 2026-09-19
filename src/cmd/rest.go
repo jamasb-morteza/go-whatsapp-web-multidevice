@@ -19,6 +19,7 @@ import (
 	"github.com/aldinokemal/go-whatsapp-web-multidevice/pkg/utils"
 	uimcp "github.com/aldinokemal/go-whatsapp-web-multidevice/ui/mcp"
 	"github.com/aldinokemal/go-whatsapp-web-multidevice/ui/rest"
+	"github.com/aldinokemal/go-whatsapp-web-multidevice/ui/rest/compat"
 	"github.com/aldinokemal/go-whatsapp-web-multidevice/ui/rest/helpers"
 	"github.com/aldinokemal/go-whatsapp-web-multidevice/ui/rest/middleware"
 	"github.com/aldinokemal/go-whatsapp-web-multidevice/ui/websocket"
@@ -152,6 +153,12 @@ func restServer(_ *cobra.Command, _ []string) {
 
 	// Device management routes (no device_id required)
 	rest.InitRestDevice(apiGroup, deviceUsecase)
+
+	// Legacy Node.js whatsapp-api compatibility routes at their original root
+	// paths (/api/v1/social/...). Registered after the Basic Auth middleware so
+	// they share its protection when configured; the session is identified by
+	// session_name in the request, not the X-Device-Id header.
+	compat.Init(app, dm, deviceUsecase, sendUsecase, chatUsecase)
 
 	// App info (version, limits) for standalone UIs; no device required
 	rest.InitRestAppInfo(apiGroup)

@@ -1053,6 +1053,9 @@ func (service serviceSend) SendContact(ctx context.Context, request domainSend.C
 	contactPhone := utils.CleanPhoneForWhatsApp(request.ContactPhone)
 	msgVCard := fmt.Sprintf("BEGIN:VCARD\nVERSION:3.0\nN:;%v;;;\nFN:%v\nTEL;type=CELL;waid=%v:+%v\nEND:VCARD",
 		contactName, contactName, contactPhone, contactPhone)
+	if vcard := strings.TrimSpace(request.VCard); vcard != "" {
+		msgVCard = vcard
+	}
 	msg := &waE2E.Message{ContactMessage: &waE2E.ContactMessage{
 		DisplayName: proto.String(contactName),
 		Vcard:       proto.String(msgVCard),
