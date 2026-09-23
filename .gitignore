@@ -11,7 +11,7 @@ src/pkged.go
 # Database
 *.db
 storages/
-
+whatsapp-go-v8.6.0.tar.gz
 # Environment
 .env
 
