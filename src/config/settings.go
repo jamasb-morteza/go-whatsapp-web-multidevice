@@ -29,9 +29,13 @@ var (
 	AppUIGithubToken    = "" // optional, raises the GitHub API rate limit
 	AppUIAssetSHA256    = "" // optional supply-chain pin: only serve the asset with this sha256
 
-	// MCP (Model Context Protocol) endpoint, served at {AppBasePath}/mcp on
-	// the REST server. Streamable HTTP transport; inherits basic auth.
+	// MCP (Model Context Protocol) endpoint. Streamable HTTP transport;
+	// inherits basic auth. When McpPort is empty, MCP is served at
+	// {AppBasePath}/mcp on the REST server port. When set (e.g. "8087"), MCP
+	// moves to a dedicated listener on that port at /mcp, so REST and MCP can
+	// be exposed on separate ports; both share credentials and usecases.
 	McpEnabled = true
+	McpPort    = ""
 
 	PathQrCode    = "statics/qrcode"
 	PathSendItems = "statics/senditems"

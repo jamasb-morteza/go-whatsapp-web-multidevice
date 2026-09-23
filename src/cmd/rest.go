@@ -77,12 +77,14 @@ func restServer(_ *cobra.Command, _ []string) {
 	// Health check endpoint (public, no auth)
 	// Registered at root path (ignoring AppBasePath) to ensure fixed availability
 	// for infrastructure health probes (Kubernetes liveness/readiness, Docker healthcheck, etc.)
-	app.Get("/health", func(c fiber.Ctx) error {
+	// The same handler is reused on the dedicated MCP listener when enabled.
+	health := func(c fiber.Ctx) error {
 		if dm != nil && dm.IsHealthy() {
 			return c.SendString("OK")
 		}
 		return c.Status(http.StatusServiceUnavailable).SendString("Service Unavailable")
-	})
+	}
+	app.Get("/health", health)
 
 	// Chatwoot webhook - registered BEFORE basic auth middleware
 	// This allows Chatwoot to send webhooks without authentication. The handler
@@ -120,17 +122,8 @@ func restServer(_ *cobra.Command, _ []string) {
 	}
 
 	if len(config.AppBasicAuthCredential) > 0 {
-		account := make(map[string]string)
-		for _, basicAuth := range config.AppBasicAuthCredential {
-			ba := strings.Split(basicAuth, ":")
-			if len(ba) != 2 {
-				logrus.Fatalln("Basic auth is not valid, please this following format <user>:<secret>")
-			}
-			account[ba[0]] = ba[1]
-		}
-
 		app.Use(middleware.WebsocketQueryAuth())
-		app.Use(newBasicAuthMiddleware(account))
+		app.Use(newBasicAuthMiddleware(basicAuthAccounts()))
 	}
 
 	// Create base path group or use app directly

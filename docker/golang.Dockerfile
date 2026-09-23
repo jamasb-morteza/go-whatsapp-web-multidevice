@@ -2,6 +2,8 @@
 # STEP 1 build executable binary
 ############################
 FROM golang:1.26-alpine3.23 AS builder
+ARG GOPROXY=https://proxy.golang.org,direct
+ENV GOPROXY=${GOPROXY}
 RUN apk add --no-cache gcc musl-dev gcompat
 WORKDIR /whatsapp
 

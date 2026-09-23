@@ -1,19 +1,39 @@
 services:
+  # REST API — isolated storage, MCP disabled here
   whatsapp_go:
     logging:
       driver: "json-file"
       options:
         max-size: "200k"
         max-file: "10"
-    build:
-      context: .
-      dockerfile: ./docker/golang.Dockerfile
+    image: whatsapp-go:v8.6.0
     restart: "on-failure"
     ports:
-      - "3000:3000"
+      - "3900:3000"
     env_file:
       - src/.env
+    environment:
+      MCP_ENABLED: "false"
     volumes:
       # Persist WhatsApp + chat DBs; entrypoint chowns for gowauser (uid 20001, gid 20000) on start.
-      - ./storages:/app/storages
-      - ./statics:/app/statics
+      - ./whatsapp_rest/storages:/app/storages
+      - ./whatsapp_rest/statics:/app/statics
+
+  # MCP — own storage/data, own WhatsApp device (scan its QR at http://localhost:8087)
+  whatsapp_mcp:
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "200k"
+        max-file: "10"
+    image: whatsapp-go:v8.6.0
+    restart: "on-failure"
+    ports:
+      - "8087:3000"
+    env_file:
+      - src/.env
+    environment:
+      MCP_ENABLED: "true"
+    volumes:
+      - ./whatsapp_mcp/storages:/app/storages
+      - ./whatsapp_mcp/statics:/app/statics

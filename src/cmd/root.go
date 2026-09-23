@@ -116,6 +116,9 @@ func initEnvConfig() {
 	if viper.GetString("mcp_enabled") != "" {
 		config.McpEnabled = viper.GetBool("mcp_enabled")
 	}
+	if envMcpPort := viper.GetString("mcp_port"); envMcpPort != "" {
+		config.McpPort = envMcpPort
+	}
 	if viper.GetString("app_ui_auto_update") != "" {
 		config.AppUIAutoUpdate = viper.GetBool("app_ui_auto_update")
 	}
@@ -391,6 +394,12 @@ func initFlags() {
 		"mcp-enabled", "",
 		config.McpEnabled,
 		`serve the MCP endpoint at /mcp --mcp-enabled <bool>`,
+	)
+	rootCmd.PersistentFlags().StringVarP(
+		&config.McpPort,
+		"mcp-port", "",
+		config.McpPort,
+		`dedicated port for the MCP endpoint; empty serves /mcp on the REST port --mcp-port <string> | example: --mcp-port=8087`,
 	)
 
 	// Database flags
