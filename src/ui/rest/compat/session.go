@@ -59,7 +59,10 @@ func (h *Compat) SetSession(c fiber.Ctx) error {
 	}
 	qrData := "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
 
-	return nodeResponse(c, fiber.StatusOK, true, "QR code received, please scan the QR code.", fiber.Map{"qr": qrData})
+	return nodeResponse(c, fiber.StatusOK, true, "QR code received, please scan the QR code.", fiber.Map{
+		"qr":        qrData,
+		"device_id": sessionName,
+	})
 }
 
 // GetStatus mirrors GET|POST /api/v1/social/session/status. Unknown or missing
@@ -74,6 +77,7 @@ func (h *Compat) GetStatus(c fiber.Ctx) error {
 	disconnected := func() error {
 		return nodeResponse(c, fiber.StatusOK, false, "", fiber.Map{
 			"status": "disconnected", "whatsapp_account_id": "",
+			"device_id": sessionName,
 		})
 	}
 
@@ -93,12 +97,14 @@ func (h *Compat) GetStatus(c fiber.Ctx) error {
 		h.purgeSession(c, sessionName)
 		return nodeResponse(c, fiber.StatusOK, false, "Phone number mismatch", fiber.Map{
 			"status": "phone_mismatch", "whatsapp_account_id": whatsappAccountID,
+			"device_id": sessionName,
 		})
 	}
 
 	return nodeResponse(c, fiber.StatusOK, true, "", fiber.Map{
 		"status":              legacyStatusFromDeviceState(dev.State),
 		"whatsapp_account_id": whatsappAccountID,
+		"device_id":           sessionName,
 	})
 }
 

@@ -310,6 +310,17 @@ func newCORSMiddleware() fiber.Handler {
 	})
 }
 
+func basicAuthAccounts() map[string]string {
+	account := make(map[string]string)
+	for _, basicAuth := range config.AppBasicAuthCredential {
+		ba := strings.Split(basicAuth, ":")
+		if len(ba) != 2 {
+			logrus.Fatalln("Basic auth is not valid, please this following format <user>:<secret>")
+		}
+		account[ba[0]] = ba[1]
+	}
+	return account
+}
 func newBasicAuthMiddleware(accounts map[string]string) fiber.Handler {
 	return basicauth.New(basicauth.Config{
 		Authorizer: func(username, password string, _ fiber.Ctx) bool {

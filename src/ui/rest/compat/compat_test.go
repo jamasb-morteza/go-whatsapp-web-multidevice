@@ -206,6 +206,9 @@ func TestSetSessionReturnsBase64QR(t *testing.T) {
 	if !strings.HasPrefix(qr, "data:image/png;base64,") {
 		t.Fatalf("qr = %q, want a data:image/png;base64, URL", qr)
 	}
+	if data["device_id"] != "sess1" {
+		t.Fatalf("device_id = %v, want sess1", data["device_id"])
+	}
 	png, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(qr, "data:image/png;base64,"))
 	if err != nil {
 		t.Fatalf("qr body is not base64: %v", err)
