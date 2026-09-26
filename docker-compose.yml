@@ -29,10 +29,10 @@ services:
       options:
         max-size: "200k"
         max-file: "10"
-    build:
-      context: .
-      dockerfile: ./docker/golang.Dockerfile
-    #image: whatsapp-go:v8.6.0
+#    build:
+#      context: .
+#      dockerfile: ./docker/golang.Dockerfile
+    image: whatsapp-go-whatsapp_go:latest
     restart: "on-failure"
     ports:
       - "8087:3000"
