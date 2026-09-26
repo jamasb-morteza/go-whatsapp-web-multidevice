@@ -44,3 +44,5 @@ docs/superpowers/
 # whatsmeow store (legacy path)
 src/whatsapp/
 .mcp.json
+*.tar
+*.tar.gz
