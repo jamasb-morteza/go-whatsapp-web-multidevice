@@ -36,10 +36,29 @@ type stubDeviceUsecase struct {
 	loginErr error
 	logouts  []string
 	removed  []string
+	// loginFlipsStateTo models a pairing/connect finishing while LoginDevice
+	// runs: the state observed after the call differs from the one before it.
+	loginFlipsStateTo device.DeviceState
+
+	addedWebhooks  map[string]*chatstorage.DeviceWebhookConfig
+	webhookConfigs map[string]*chatstorage.DeviceWebhookConfig
+	webhookSets    []string
 }
 
-func (s *stubDeviceUsecase) AddDevice(_ context.Context, deviceID string, _ *chatstorage.DeviceWebhookConfig) (*device.Device, error) {
+func (s *stubDeviceUsecase) AddDevice(_ context.Context, deviceID string, webhook *chatstorage.DeviceWebhookConfig) (*device.Device, error) {
 	s.added = append(s.added, deviceID)
+	if webhook != nil {
+		if s.addedWebhooks == nil {
+			s.addedWebhooks = map[string]*chatstorage.DeviceWebhookConfig{}
+		}
+		if s.webhookConfigs == nil {
+			s.webhookConfigs = map[string]*chatstorage.DeviceWebhookConfig{}
+		}
+		forAdd := *webhook
+		forStore := *webhook
+		s.addedWebhooks[deviceID] = &forAdd
+		s.webhookConfigs[deviceID] = &forStore
+	}
 	if s.dm == nil {
 		return &device.Device{ID: deviceID}, nil
 	}
@@ -61,6 +80,11 @@ func (s *stubDeviceUsecase) GetDevice(_ context.Context, deviceID string) (*devi
 
 func (s *stubDeviceUsecase) LoginDevice(_ context.Context, deviceID string) (app.LoginResponse, error) {
 	s.logins = append(s.logins, deviceID)
+	if s.loginFlipsStateTo != "" {
+		if d, ok := s.devices[deviceID]; ok {
+			d.State = s.loginFlipsStateTo
+		}
+	}
 	return app.LoginResponse{Code: "2@AbCdEfGhIjKlMnOpQrStUvWxYz0123456789,AbCdEfGhIjKlMnOpQrStUvWxYz01234567,AbCdEfGh==", Duration: 20 * 1000000000}, s.loginErr
 }
 
@@ -71,6 +95,22 @@ func (s *stubDeviceUsecase) LogoutDevice(_ context.Context, deviceID string) err
 
 func (s *stubDeviceUsecase) RemoveDevice(_ context.Context, deviceID string) error {
 	s.removed = append(s.removed, deviceID)
+	return nil
+}
+
+func (s *stubDeviceUsecase) GetDeviceWebhookConfig(_ context.Context, deviceID string) (*chatstorage.DeviceWebhookConfig, error) {
+	cfg, ok := s.webhookConfigs[deviceID]
+	if !ok {
+		return nil, nil
+	}
+	snapshot := *cfg
+	return &snapshot, nil
+}
+
+func (s *stubDeviceUsecase) SetDeviceWebhookConfig(_ context.Context, deviceID string, config *chatstorage.DeviceWebhookConfig) error {
+	s.webhookSets = append(s.webhookSets, deviceID)
+	stored := *config
+	s.webhookConfigs[deviceID] = &stored
 	return nil
 }
 
@@ -144,7 +184,12 @@ func (s *stubChatUsecase) GetChatMessages(_ context.Context, r domainChat.GetCha
 
 func newCompatTestApp() (*fiber.App, *whatsapp.DeviceManager, *stubDeviceUsecase, *stubSendUsecase, *stubChatUsecase) {
 	dm := whatsapp.NewDeviceManager(nil, nil, nil)
-	deviceSvc := &stubDeviceUsecase{dm: dm, devices: map[string]*device.Device{}}
+	deviceSvc := &stubDeviceUsecase{
+		dm:             dm,
+		devices:        map[string]*device.Device{},
+		addedWebhooks:  map[string]*chatstorage.DeviceWebhookConfig{},
+		webhookConfigs: map[string]*chatstorage.DeviceWebhookConfig{},
+	}
 	sendSvc := &stubSendUsecase{}
 	chatSvc := &stubChatUsecase{}
 
@@ -228,11 +273,75 @@ func TestSetSessionReturnsBase64QR(t *testing.T) {
 	}
 }
 
-func TestSetSessionExistingSessionConflicts(t *testing.T) {
+func TestSetSessionExistingDisconnectedReturnsQR(t *testing.T) {
 	app, dm, deviceSvc, _, _ := newCompatTestApp()
 	if _, err := dm.CreateDevice(context.Background(), "sess1"); err != nil {
 		t.Fatalf("CreateDevice: %v", err)
 	}
+	deviceSvc.devices["sess1"] = &device.Device{State: device.DeviceStateDisconnected}
+
+	status, body := doRequest(app, http.MethodPost, "/api/v1/social/session/set", "application/json",
+		`{"session_name":"sess1"}`)
+
+	if status != http.StatusOK {
+		t.Fatalf("status = %d (%v), want %d with a fresh QR", status, body, http.StatusOK)
+	}
+	if len(deviceSvc.added) != 0 {
+		t.Fatalf("AddDevice must not be called for an existing session, got %v", deviceSvc.added)
+	}
+	if len(deviceSvc.logins) != 1 || deviceSvc.logins[0] != "sess1" {
+		t.Fatalf("LoginDevice calls = %v, want [sess1]", deviceSvc.logins)
+	}
+	data, _ := body["data"].(map[string]any)
+	if data == nil || !strings.HasPrefix(data["qr"].(string), "data:image/png;base64,") {
+		t.Fatalf("qr missing in response: %v", body)
+	}
+}
+
+func TestSetSessionExistingLoggedInReturnsConnected(t *testing.T) {
+	app, dm, deviceSvc, _, _ := newCompatTestApp()
+	if _, err := dm.CreateDevice(context.Background(), "sess1"); err != nil {
+		t.Fatalf("CreateDevice: %v", err)
+	}
+	deviceSvc.devices["sess1"] = &device.Device{
+		State: device.DeviceStateLoggedIn,
+		JID:   "628123456789:1@s.whatsapp.net",
+	}
+
+	status, body := doRequest(app, http.MethodPost, "/api/v1/social/session/set", "application/json",
+		`{"session_name":"sess1"}`)
+
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want %d", status, http.StatusOK)
+	}
+	if body["success"] != true {
+		t.Fatalf("success = %v, want true", body["success"])
+	}
+	if body["message"] != "Session already connected." {
+		t.Fatalf("message = %v, want Session already connected.", body["message"])
+	}
+	data, _ := body["data"].(map[string]any)
+	if data["qr"] != "" {
+		t.Fatalf("data.qr = %v, want empty string so legacy clients read it safely", data["qr"])
+	}
+	if data["status"] != "connected" {
+		t.Fatalf("data.status = %v, want connected", data["status"])
+	}
+	if data["device_id"] != "sess1" {
+		t.Fatalf("data.device_id = %v, want sess1", data["device_id"])
+	}
+	if len(deviceSvc.logins) != 0 {
+		t.Fatalf("LoginDevice must not run for a logged-in device, got %v", deviceSvc.logins)
+	}
+}
+
+func TestSetSessionExistingSavedSessionConflicts(t *testing.T) {
+	app, dm, deviceSvc, _, _ := newCompatTestApp()
+	if _, err := dm.CreateDevice(context.Background(), "sess1"); err != nil {
+		t.Fatalf("CreateDevice: %v", err)
+	}
+	deviceSvc.devices["sess1"] = &device.Device{State: device.DeviceStateDisconnected}
+	deviceSvc.loginErr = pkgError.ErrSessionSaved
 
 	status, body := doRequest(app, http.MethodPost, "/api/v1/social/session/set", "application/json",
 		`{"session_name":"sess1"}`)
@@ -248,6 +357,104 @@ func TestSetSessionExistingSessionConflicts(t *testing.T) {
 	}
 	if len(deviceSvc.added) != 0 {
 		t.Fatalf("AddDevice must not be called for an existing session, got %v", deviceSvc.added)
+	}
+}
+
+func TestSetSessionLoginRaceAlreadyLoggedInReturnsConnected(t *testing.T) {
+	app, _, deviceSvc, _, _ := newCompatTestApp()
+	deviceSvc.devices["sess1"] = &device.Device{State: device.DeviceStateDisconnected}
+	deviceSvc.loginErr = pkgError.ErrAlreadyLoggedIn
+
+	status, body := doRequest(app, http.MethodPost, "/api/v1/social/session/set", "application/json",
+		`{"session_name":"sess1"}`)
+
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want %d", status, http.StatusOK)
+	}
+	if body["message"] != "Session already connected." {
+		t.Fatalf("message = %v, want Session already connected.", body["message"])
+	}
+}
+
+func TestSetSessionLoginFailureReturnsUnableToCreate(t *testing.T) {
+	app, _, deviceSvc, _, _ := newCompatTestApp()
+	deviceSvc.devices["sess1"] = &device.Device{State: device.DeviceStateDisconnected}
+	deviceSvc.loginErr = pkgError.ErrReconnect
+
+	status, body := doRequest(app, http.MethodPost, "/api/v1/social/session/set", "application/json",
+		`{"session_name":"sess1"}`)
+
+	if status != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", status, http.StatusInternalServerError)
+	}
+	if body["message"] != "Unable to create session." {
+		t.Fatalf("message = %v, want Unable to create session.", body["message"])
+	}
+}
+
+func TestSetSessionSavedButConnectedRaceReturnsConnected(t *testing.T) {
+	app, dm, deviceSvc, _, _ := newCompatTestApp()
+	if _, err := dm.CreateDevice(context.Background(), "sess1"); err != nil {
+		t.Fatalf("CreateDevice: %v", err)
+	}
+	deviceSvc.devices["sess1"] = &device.Device{State: device.DeviceStateDisconnected}
+	deviceSvc.loginErr = pkgError.ErrSessionSaved
+	deviceSvc.loginFlipsStateTo = device.DeviceStateLoggedIn
+
+	status, body := doRequest(app, http.MethodPost, "/api/v1/social/session/set", "application/json",
+		`{"session_name":"sess1"}`)
+
+	if status != http.StatusOK {
+		t.Fatalf("status = %d (%v), want %d — a fresh state lookup must beat the stale 409", status, body, http.StatusOK)
+	}
+	if body["message"] != "Session already connected." {
+		t.Fatalf("message = %v, want Session already connected.", body["message"])
+	}
+}
+
+func TestSetSessionStoresAppURLAsDeviceWebhook(t *testing.T) {
+	app, _, deviceSvc, _, _ := newCompatTestApp()
+
+	status, body := doRequest(app, http.MethodPost, "/api/v1/social/session/set", "application/json",
+		`{"session_name":"sess1","jwt_token":"abc.def.ghi","app_url":"https://joolio.test"}`)
+
+	if status != http.StatusOK {
+		t.Fatalf("status = %d (%v), want %d", status, body, http.StatusOK)
+	}
+	webhook, ok := deviceSvc.addedWebhooks["sess1"]
+	if !ok || webhook.WebhookURL == nil || *webhook.WebhookURL != "https://joolio.test" {
+		t.Fatalf("AddDevice webhook = %+v, want app_url https://joolio.test persisted", webhook)
+	}
+}
+
+func TestSetSessionExistingDeviceWebhookUpdatedFromAppURL(t *testing.T) {
+	app, dm, deviceSvc, _, _ := newCompatTestApp()
+	if _, err := dm.CreateDevice(context.Background(), "sess1"); err != nil {
+		t.Fatalf("CreateDevice: %v", err)
+	}
+	deviceSvc.devices["sess1"] = &device.Device{State: device.DeviceStateDisconnected}
+	oldURL := "https://old.test"
+	deviceSvc.webhookConfigs["sess1"] = &chatstorage.DeviceWebhookConfig{
+		WebhookURL:    &oldURL,
+		WebhookSecret: "s3cret",
+		WebhookEvents: "message",
+	}
+
+	status, body := doRequest(app, http.MethodPost, "/api/v1/social/session/set", "application/json",
+		`{"session_name":"sess1","app_url":"https://joolio.test"}`)
+
+	if status != http.StatusOK {
+		t.Fatalf("status = %d (%v), want %d", status, body, http.StatusOK)
+	}
+	if len(deviceSvc.webhookSets) != 1 || deviceSvc.webhookSets[0] != "sess1" {
+		t.Fatalf("SetDeviceWebhookConfig calls = %v, want [sess1]", deviceSvc.webhookSets)
+	}
+	stored := deviceSvc.webhookConfigs["sess1"]
+	if stored.WebhookURL == nil || *stored.WebhookURL != "https://joolio.test" {
+		t.Fatalf("webhook_url = %v, want https://joolio.test", stored.WebhookURL)
+	}
+	if stored.WebhookSecret != "s3cret" || stored.WebhookEvents != "message" {
+		t.Fatalf("webhook secret/events = %q/%q, want preserved", stored.WebhookSecret, stored.WebhookEvents)
 	}
 }
 

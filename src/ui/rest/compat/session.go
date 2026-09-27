@@ -1,10 +1,12 @@
 package compat
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"strings"
 
+	"github.com/aldinokemal/go-whatsapp-web-multidevice/domains/chatstorage"
 	"github.com/aldinokemal/go-whatsapp-web-multidevice/domains/device"
 	pkgError "github.com/aldinokemal/go-whatsapp-web-multidevice/pkg/error"
 	"github.com/gofiber/fiber/v3"
@@ -13,10 +15,12 @@ import (
 )
 
 // SetSession mirrors POST /api/v1/social/session/set: create the session and
-// answer with an inline base64 QR data URL. The legacy service also accepted
-// app_url/isLegacy; app_url is not mapped to a device webhook because this
-// service's native webhook payload has a different shape than the legacy one,
-// and isLegacy has no meaning for a multi-device-only implementation.
+// answer with an inline base64 QR data URL. The legacy app_url field is stored
+// as the device webhook URL so events reach the caller. An existing
+// logged-in device answers "Session already connected."; an existing unlinked
+// device gets a fresh QR instead of the legacy 409, which is now reserved for
+// a stored pairing that cannot produce one (ErrSessionSaved). isLegacy has no
+// meaning for a multi-device-only implementation.
 func (h *Compat) SetSession(c fiber.Ctx) error {
 	var req struct {
 		SessionName string `json:"session_name" form:"session_name"`
@@ -32,22 +36,55 @@ func (h *Compat) SetSession(c fiber.Ctx) error {
 	if sessionName == "" {
 		return nodeResponse(c, fiber.StatusBadRequest, false, "session_name is required", nil)
 	}
+	appURL := strings.TrimSpace(req.AppURL)
 
-	if h.dm != nil {
-		if _, exists := h.dm.GetDevice(sessionName); exists {
-			return nodeResponse(c, fiber.StatusConflict, false, "Session already exists, please use another id.", nil)
-		}
+	alreadyConnected := func() error {
+		return nodeResponse(c, fiber.StatusOK, true, "Session already connected.", fiber.Map{
+			"qr":        "",
+			"device_id": sessionName,
+			"status":    "connected",
+		})
 	}
 
-	if _, err := h.deviceSvc.AddDevice(c.Context(), sessionName, nil); err != nil {
-		return nodeResponse(c, fiber.StatusInternalServerError, false, "Unable to create session.", nil)
+	exists := false
+	if h.dm != nil {
+		_, exists = h.dm.GetDevice(sessionName)
+	}
+	if exists {
+		// Refresh the webhook even for a connected device so a caller can
+		// re-point it, then answer without touching the WhatsApp session.
+		if err := h.setDeviceWebhookFromAppURL(c.Context(), sessionName, appURL); err != nil {
+			logrus.Errorf("[COMPAT] webhook update for %s failed: %v", sessionName, err)
+			return nodeResponse(c, fiber.StatusInternalServerError, false, "Unable to create session.", nil)
+		}
+		if dev, err := h.deviceSvc.GetDevice(c.Context(), sessionName); err == nil && dev != nil && dev.State == device.DeviceStateLoggedIn {
+			return alreadyConnected()
+		}
+	} else {
+		var webhook *chatstorage.DeviceWebhookConfig
+		if appURL != "" {
+			webhook = &chatstorage.DeviceWebhookConfig{WebhookURL: &appURL}
+		}
+		if _, err := h.deviceSvc.AddDevice(c.Context(), sessionName, webhook); err != nil {
+			return nodeResponse(c, fiber.StatusInternalServerError, false, "Unable to create session.", nil)
+		}
 	}
 
 	login, err := h.deviceSvc.LoginDevice(c.Context(), sessionName)
 	if err != nil {
 		// A device with a stored pairing cannot produce a new QR code; the
 		// legacy service surfaced that case as "session already exists".
-		if errors.Is(err, pkgError.ErrAlreadyLoggedIn) || errors.Is(err, pkgError.ErrSessionSaved) {
+		if errors.Is(err, pkgError.ErrAlreadyLoggedIn) {
+			return alreadyConnected()
+		}
+		if errors.Is(err, pkgError.ErrSessionSaved) {
+			// Login's ErrQRStoreContainsID path checks IsLoggedIn while the
+			// reconnect handshake may still be in flight, so a just-connected
+			// device can land here; trust a fresh state lookup over that race.
+			if dev, devErr := h.deviceSvc.GetDevice(c.Context(), sessionName); devErr == nil && dev != nil &&
+				(dev.State == device.DeviceStateLoggedIn || dev.JID != "") {
+				return alreadyConnected()
+			}
 			return nodeResponse(c, fiber.StatusConflict, false, "Session already exists, please use another id.", nil)
 		}
 		return nodeResponse(c, fiber.StatusInternalServerError, false, "Unable to create session.", nil)
@@ -63,6 +100,27 @@ func (h *Compat) SetSession(c fiber.Ctx) error {
 		"qr":        qrData,
 		"device_id": sessionName,
 	})
+}
+
+// setDeviceWebhookFromAppURL stores the caller's app_url as the device webhook
+// URL, preserving any saved secret/event filter. An unchanged URL is a no-op
+// so QR polling doesn't rewrite (and broadcast) on every attempt.
+func (h *Compat) setDeviceWebhookFromAppURL(ctx context.Context, sessionName, appURL string) error {
+	if appURL == "" {
+		return nil
+	}
+	cfg, err := h.deviceSvc.GetDeviceWebhookConfig(ctx, sessionName)
+	if err != nil && !errors.Is(err, pkgError.ErrDeviceNotFound) {
+		return err
+	}
+	if cfg == nil {
+		cfg = &chatstorage.DeviceWebhookConfig{}
+	}
+	if cfg.WebhookURL != nil && *cfg.WebhookURL == appURL {
+		return nil
+	}
+	cfg.WebhookURL = &appURL
+	return h.deviceSvc.SetDeviceWebhookConfig(ctx, sessionName, cfg)
 }
 
 // GetStatus mirrors GET|POST /api/v1/social/session/status. Unknown or missing

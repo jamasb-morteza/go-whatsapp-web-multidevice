@@ -1,7 +1,6 @@
 services:
   # REST API — isolated storage, MCP disabled here
   whatsapp_go:
-    dns: ["8.8.8.8", "1.1.1.1"]
     logging:
       driver: "json-file"
       options:
@@ -25,7 +24,6 @@ services:
 
   # MCP — own storage/data, own WhatsApp device (scan its QR at http://localhost:8087)
   whatsapp_mcp:
-    dns: ["8.8.8.8", "1.1.1.1"]
     logging:
       driver: "json-file"
       options:
