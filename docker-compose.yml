@@ -10,7 +10,7 @@ services:
 #    build:
 #      context: .
 #      dockerfile: ./docker/golang.Dockerfile
-    image: whatsapp-go-whatsapp_go:latest
+    image: whatsapp-go:v8.6.0
     restart: "on-failure"
     ports:
       - "3900:3000"
@@ -34,7 +34,7 @@ services:
 #    build:
 #      context: .
 #      dockerfile: ./docker/golang.Dockerfile
-    image: whatsapp-go-whatsapp_go:latest
+    image: whatsapp-go:v8.6.0
     restart: "on-failure"
     ports:
       - "8087:3000"
