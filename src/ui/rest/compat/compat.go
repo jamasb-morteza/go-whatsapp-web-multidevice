@@ -14,7 +14,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/aldinokemal/go-whatsapp-web-multidevice/infrastructure/idempotency"
 	"strings"
+	"sync"
 
 	"github.com/aldinokemal/go-whatsapp-web-multidevice/domains/chat"
 	"github.com/aldinokemal/go-whatsapp-web-multidevice/domains/device"
@@ -27,10 +29,13 @@ import (
 // is used directly (not via middleware) because the legacy API identifies the
 // session in the request body/query, not the X-Device-Id header.
 type Compat struct {
-	dm        *whatsapp.DeviceManager
-	deviceSvc device.IDeviceUsecase
-	sendSvc   send.ISendUsecase
-	chatSvc   chat.IChatUsecase
+	dm         *whatsapp.DeviceManager
+	deviceSvc  device.IDeviceUsecase
+	sendSvc    send.ISendUsecase
+	chatSvc    chat.IChatUsecase
+	sendLedger *idempotency.Store
+	ledgerOnce sync.Once
+	ledgerErr  error
 }
 
 // Init registers the legacy routes at their original root paths. Register it
@@ -47,7 +52,7 @@ func Init(app fiber.Router, dm *whatsapp.DeviceManager, deviceSvc device.IDevice
 	session.Post("/delete", h.DeleteSession)
 	session.Delete("/delete", h.DeleteSession)
 
-	app.Post("/api/v1/social/message/send", h.SendMessage)
+	app.Post("/api/v1/social/message/send", h.sendIdempotency, h.SendMessage)
 	app.Get("/api/v1/social/chat/list", h.ChatList)
 	app.Get("/api/v1/social/chat/get", h.ChatGet)
 

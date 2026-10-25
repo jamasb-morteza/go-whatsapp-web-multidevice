@@ -58,6 +58,10 @@ func (h *Compat) SendMessage(c fiber.Ctx) error {
 		return sendLegacyError(c, http.StatusBadRequest, "invalid request body: "+err.Error(), "")
 	}
 
+	_, fileErr := c.FormFile("file")
+	if firstNonEmpty(body.Message, body.Text) == "" && fileErr != nil && len(body.Location) == 0 && len(body.Contact) == 0 {
+		return sendLegacyError(c, 400, "message content is required", "")
+	}
 	instance, err := h.resolveInstance(body.SessionName)
 	if err != nil {
 		// The legacy "not login" answer: no session means the caller must

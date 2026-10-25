@@ -324,8 +324,8 @@ func TestSetSessionExistingLoggedInReturnsConnected(t *testing.T) {
 	if data["qr"] != "" {
 		t.Fatalf("data.qr = %v, want empty string so legacy clients read it safely", data["qr"])
 	}
-	if data["status"] != "connected" {
-		t.Fatalf("data.status = %v, want connected", data["status"])
+	if data["status"] != "authenticated" {
+		t.Fatalf("data.status = %v, want authenticated", data["status"])
 	}
 	if data["device_id"] != "sess1" {
 		t.Fatalf("data.device_id = %v, want sess1", data["device_id"])
@@ -335,7 +335,7 @@ func TestSetSessionExistingLoggedInReturnsConnected(t *testing.T) {
 	}
 }
 
-func TestSetSessionExistingSavedSessionConflicts(t *testing.T) {
+func TestSetSessionExistingSavedSessionReconnects(t *testing.T) {
 	app, dm, deviceSvc, _, _ := newCompatTestApp()
 	if _, err := dm.CreateDevice(context.Background(), "sess1"); err != nil {
 		t.Fatalf("CreateDevice: %v", err)
@@ -346,13 +346,13 @@ func TestSetSessionExistingSavedSessionConflicts(t *testing.T) {
 	status, body := doRequest(app, http.MethodPost, "/api/v1/social/session/set", "application/json",
 		`{"session_name":"sess1"}`)
 
-	if status != http.StatusConflict {
-		t.Fatalf("status = %d, want 409", status)
+	if status != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", status)
 	}
-	if body["success"] != false {
-		t.Fatalf("success = %v, want false", body["success"])
+	if body["success"] != true {
+		t.Fatalf("success = %v, want true", body["success"])
 	}
-	if body["message"] != "Session already exists, please use another id." {
+	if body["message"] != "Session reconnecting." {
 		t.Fatalf("message = %v", body["message"])
 	}
 	if len(deviceSvc.added) != 0 {
@@ -537,7 +537,7 @@ func TestGetStatusConnectedWithoutLogin(t *testing.T) {
 	}
 }
 
-func TestGetStatusPhoneMismatchPurgesSession(t *testing.T) {
+func TestGetStatusPhoneMismatchPreservesSession(t *testing.T) {
 	app, dm, deviceSvc, _, _ := newCompatTestApp()
 	if _, err := dm.CreateDevice(context.Background(), "sess1"); err != nil {
 		t.Fatalf("CreateDevice: %v", err)
@@ -567,11 +567,8 @@ func TestGetStatusPhoneMismatchPurgesSession(t *testing.T) {
 	if data["whatsapp_account_id"] != "628999888777:2@s.whatsapp.net" {
 		t.Fatalf("data.whatsapp_account_id = %v", data["whatsapp_account_id"])
 	}
-	if len(deviceSvc.logouts) != 1 || deviceSvc.logouts[0] != "sess1" {
-		t.Fatalf("LogoutDevice calls = %v, want [sess1]", deviceSvc.logouts)
-	}
-	if len(deviceSvc.removed) != 1 || deviceSvc.removed[0] != "sess1" {
-		t.Fatalf("RemoveDevice calls = %v, want [sess1]", deviceSvc.removed)
+	if len(deviceSvc.logouts) != 0 || len(deviceSvc.removed) != 0 {
+		t.Fatal("status read must not delete a pairing")
 	}
 }
 

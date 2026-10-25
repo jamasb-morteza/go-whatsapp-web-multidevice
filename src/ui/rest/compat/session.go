@@ -23,10 +23,12 @@ import (
 // meaning for a multi-device-only implementation.
 func (h *Compat) SetSession(c fiber.Ctx) error {
 	var req struct {
-		SessionName string `json:"session_name" form:"session_name"`
-		JwtToken    string `json:"jwt_token" form:"jwt_token"`
-		AppURL      string `json:"app_url" form:"app_url"`
-		IsLegacy    string `json:"isLegacy" form:"isLegacy"`
+		SessionName   string  `json:"session_name" form:"session_name"`
+		JwtToken      string  `json:"jwt_token" form:"jwt_token"`
+		AppURL        string  `json:"app_url" form:"app_url"`
+		IsLegacy      string  `json:"isLegacy" form:"isLegacy"`
+		CallbackURL   string  `json:"callback_url" form:"callback_url"`
+		WebhookSecret *string `json:"webhook_secret" form:"webhook_secret"`
 	}
 	if err := c.Bind().Body(&req); err != nil {
 		return nodeResponse(c, fiber.StatusBadRequest, false, "Invalid request body", nil)
@@ -36,13 +38,17 @@ func (h *Compat) SetSession(c fiber.Ctx) error {
 	if sessionName == "" {
 		return nodeResponse(c, fiber.StatusBadRequest, false, "session_name is required", nil)
 	}
-	appURL := strings.TrimSpace(req.AppURL)
+	appURL := strings.TrimSpace(req.CallbackURL)
+	if appURL == "" {
+		appURL = strings.TrimSpace(req.AppURL)
+	}
 
 	alreadyConnected := func() error {
 		return nodeResponse(c, fiber.StatusOK, true, "Session already connected.", fiber.Map{
 			"qr":        "",
 			"device_id": sessionName,
-			"status":    "connected",
+			"status":    "authenticated",
+			"paired":    true, "ready": true,
 		})
 	}
 
@@ -53,7 +59,7 @@ func (h *Compat) SetSession(c fiber.Ctx) error {
 	if exists {
 		// Refresh the webhook even for a connected device so a caller can
 		// re-point it, then answer without touching the WhatsApp session.
-		if err := h.setDeviceWebhookFromAppURL(c.Context(), sessionName, appURL); err != nil {
+		if err := h.setDeviceWebhookFromAppURL(c.Context(), sessionName, appURL, req.WebhookSecret); err != nil {
 			logrus.Errorf("[COMPAT] webhook update for %s failed: %v", sessionName, err)
 			return nodeResponse(c, fiber.StatusInternalServerError, false, "Unable to create session.", nil)
 		}
@@ -64,6 +70,9 @@ func (h *Compat) SetSession(c fiber.Ctx) error {
 		var webhook *chatstorage.DeviceWebhookConfig
 		if appURL != "" {
 			webhook = &chatstorage.DeviceWebhookConfig{WebhookURL: &appURL}
+			if req.WebhookSecret != nil {
+				webhook.WebhookSecret = *req.WebhookSecret
+			}
 		}
 		if _, err := h.deviceSvc.AddDevice(c.Context(), sessionName, webhook); err != nil {
 			return nodeResponse(c, fiber.StatusInternalServerError, false, "Unable to create session.", nil)
@@ -82,10 +91,10 @@ func (h *Compat) SetSession(c fiber.Ctx) error {
 			// reconnect handshake may still be in flight, so a just-connected
 			// device can land here; trust a fresh state lookup over that race.
 			if dev, devErr := h.deviceSvc.GetDevice(c.Context(), sessionName); devErr == nil && dev != nil &&
-				(dev.State == device.DeviceStateLoggedIn || dev.JID != "") {
+				dev.State == device.DeviceStateLoggedIn {
 				return alreadyConnected()
 			}
-			return nodeResponse(c, fiber.StatusConflict, false, "Session already exists, please use another id.", nil)
+			return nodeResponse(c, fiber.StatusAccepted, true, "Session reconnecting.", fiber.Map{"qr": "", "device_id": sessionName, "status": "reconnecting", "paired": true, "ready": false})
 		}
 		return nodeResponse(c, fiber.StatusInternalServerError, false, "Unable to create session.", nil)
 	}
@@ -97,15 +106,17 @@ func (h *Compat) SetSession(c fiber.Ctx) error {
 	qrData := "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
 
 	return nodeResponse(c, fiber.StatusOK, true, "QR code received, please scan the QR code.", fiber.Map{
-		"qr":        qrData,
-		"device_id": sessionName,
+		"qr":         qrData,
+		"device_id":  sessionName,
+		"expires_in": max(1, int(login.Duration)),
+		"status":     "qr_pending", "paired": false, "ready": false,
 	})
 }
 
 // setDeviceWebhookFromAppURL stores the caller's app_url as the device webhook
 // URL, preserving any saved secret/event filter. An unchanged URL is a no-op
 // so QR polling doesn't rewrite (and broadcast) on every attempt.
-func (h *Compat) setDeviceWebhookFromAppURL(ctx context.Context, sessionName, appURL string) error {
+func (h *Compat) setDeviceWebhookFromAppURL(ctx context.Context, sessionName, appURL string, secrets ...*string) error {
 	if appURL == "" {
 		return nil
 	}
@@ -116,7 +127,11 @@ func (h *Compat) setDeviceWebhookFromAppURL(ctx context.Context, sessionName, ap
 	if cfg == nil {
 		cfg = &chatstorage.DeviceWebhookConfig{}
 	}
-	if cfg.WebhookURL != nil && *cfg.WebhookURL == appURL {
+	secretChanged := len(secrets) > 0 && secrets[0] != nil && cfg.WebhookSecret != *secrets[0]
+	if secretChanged {
+		cfg.WebhookSecret = *secrets[0]
+	}
+	if !secretChanged && cfg.WebhookURL != nil && *cfg.WebhookURL == appURL {
 		return nil
 	}
 	cfg.WebhookURL = &appURL
@@ -149,10 +164,9 @@ func (h *Compat) GetStatus(c fiber.Ctx) error {
 	}
 
 	whatsappAccountID := dev.JID
-	if whatsappAccountID != "" && allowedPhone != "" && !strings.Contains(whatsappAccountID, allowedPhone) {
+	if whatsappAccountID != "" && allowedPhone != "" && strings.Split(strings.Split(whatsappAccountID, "@")[0], ":")[0] != allowedPhone {
 		logrus.Warnf("[COMPAT] phone mismatch for session %s: allowed %s, actual %s",
 			sessionName, allowedPhone, whatsappAccountID)
-		h.purgeSession(c, sessionName)
 		return nodeResponse(c, fiber.StatusOK, false, "Phone number mismatch", fiber.Map{
 			"status": "phone_mismatch", "whatsapp_account_id": whatsappAccountID,
 			"device_id": sessionName,
@@ -160,7 +174,8 @@ func (h *Compat) GetStatus(c fiber.Ctx) error {
 	}
 
 	return nodeResponse(c, fiber.StatusOK, true, "", fiber.Map{
-		"status":              legacyStatusFromDeviceState(dev.State),
+		"status": legacyStatusFromDeviceState(dev.State),
+		"paired": dev.JID != "", "ready": dev.State == device.DeviceStateLoggedIn,
 		"whatsapp_account_id": whatsappAccountID,
 		"device_id":           sessionName,
 	})
@@ -198,7 +213,9 @@ func (h *Compat) DeleteSession(c fiber.Ctx) error {
 		}
 	}
 
-	h.purgeSession(c, sessionName)
+	if err := h.purgeSession(c, sessionName); err != nil {
+		return nodeResponse(c, fiber.StatusServiceUnavailable, false, "Unable to delete session. Retry after checking status.", nil)
+	}
 	return nodeResponse(c, fiber.StatusOK, true, "The session has been successfully deleted.", nil)
 }
 
@@ -206,11 +223,13 @@ func (h *Compat) DeleteSession(c fiber.Ctx) error {
 // did: best-effort WhatsApp logout, then full local deletion. PurgeDevice
 // already performs the unlink, so failures are logged, not propagated — the
 // legacy endpoints answered success regardless.
-func (h *Compat) purgeSession(c fiber.Ctx, sessionName string) {
+func (h *Compat) purgeSession(c fiber.Ctx, sessionName string) error {
 	if err := h.deviceSvc.LogoutDevice(c.Context(), sessionName); err != nil {
 		logrus.Debugf("[COMPAT] logout during purge of %s failed (continuing): %v", sessionName, err)
 	}
 	if err := h.deviceSvc.RemoveDevice(c.Context(), sessionName); err != nil {
 		logrus.Warnf("[COMPAT] purge of session %s failed: %v", sessionName, err)
+		return err
 	}
+	return nil
 }

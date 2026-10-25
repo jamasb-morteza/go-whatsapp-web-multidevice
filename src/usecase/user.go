@@ -395,9 +395,9 @@ func (service serviceUser) IsOnWhatsApp(ctx context.Context, request domainUser.
 
 	utils.SanitizePhone(&request.Phone)
 
-	response.IsOnWhatsApp = utils.IsOnWhatsapp(client, request.Phone)
+	response.IsOnWhatsApp, err = checkRegistration(ctx, client.IsOnWhatsApp, request.Phone)
 
-	return response, nil
+	return response, err
 }
 
 func (service serviceUser) BusinessProfile(ctx context.Context, request domainUser.BusinessProfileRequest) (response domainUser.BusinessProfileResponse, err error) {
