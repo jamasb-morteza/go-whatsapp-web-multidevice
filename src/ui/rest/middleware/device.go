@@ -40,6 +40,11 @@ func DeviceMiddleware(dm *whatsapp.DeviceManager) fiber.Handler {
 			deviceID = strings.TrimSpace(c.Query("device_id"))
 		}
 
+		// The social lookup contract identifies its device with session_id.
+		if deviceID == "" && strings.HasSuffix(path, "/user/social-info") {
+			deviceID = strings.TrimSpace(c.Query("session_id"))
+		}
+
 		instance, resolvedID, err := dm.ResolveDevice(deviceID)
 		if err != nil {
 			// ResolveDevice returns an ID when provided but missing; use it for payload clarity.

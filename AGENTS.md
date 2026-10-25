@@ -1,3 +1,18 @@
+# Shared repository workflow
+
+These rules apply to any coding agent working in this repository.
+
+- For every request involving repository inspection, search, analysis, review, debugging, change planning, or development, the first tool action must be `codebase-memory` MCP `index_repository` for this repository root. Wait for successful completion before reading or analyzing repository files, planning changes, or editing. Repeat this even when the repository was indexed before. If indexing is unavailable or fails, stop dependent work and report the blocker.
+- Run every operating-system and shell command through `rtk`, including file reads and status checks. Use its dedicated wrapper when available; otherwise use `rtk proxy <command>`. In command chains, wrap each command separately. If RTK is unavailable, stop dependent shell work and report the blocker. Commands written below in native form are documentation; wrap them when executing.
+- Use the `codebase-memory` graph first for structural code discovery: `search_graph` for symbols, `trace_path` for relationships, `get_code_snippet` for exact source, and `query_graph` or `get_architecture` for broader questions. Text search is appropriate for literals, errors, configuration, non-code files, and graph gaps; shell searches still go through RTK.
+- After identifying files relied on as evidence, run `check_index_coverage` for every such path and for the relevant scope before negative or exhaustive claims. Read reported missing, stale, unknown, or excluded source ranges directly and qualify conclusions. A clean coverage signal is not proof of completeness.
+
+# UI/UX skill priority
+
+For UI/UX work in this repository, including design, interface implementation, review, and UI testing, use `$joolio-ui-ux-toolkit` as the first UI/UX skill after any mandatory repository indexing. Use it to choose specialist skills and coordinate their results. The selected specialists own their methods and execution.
+
+When delegating UI/UX work, include this routing requirement and the chosen specialist in each subagent's task. A subagent should consult the toolkit again if its UI/UX scope changes or the specialist choice becomes unclear. Follow explicit user instructions when they set a different priority.
+
 # PROJECT KNOWLEDGE BASE
 
 Generated: 2026-06-06

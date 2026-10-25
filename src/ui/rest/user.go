@@ -14,6 +14,7 @@ type User struct {
 func InitRestUser(app fiber.Router, service domainUser.IUserUsecase) User {
 	rest := User{Service: service}
 	app.Get("/user/info", rest.UserInfo)
+	app.Get("/user/social-info", rest.SocialProfile)
 	app.Get("/user/avatar", rest.UserAvatar)
 	app.Post("/user/avatar", rest.UserChangeAvatar)
 	app.Post("/user/pushname", rest.UserChangePushName)
