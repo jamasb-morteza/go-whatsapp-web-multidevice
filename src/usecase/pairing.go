@@ -12,6 +12,7 @@ import (
 // pairingOperation owns the rotating QR snapshot, independently of HTTP requests.
 type pairingOperation struct {
 	client  *whatsmeow.Client
+	cancel  context.CancelFunc
 	mu      sync.Mutex
 	current domainApp.LoginResponse
 	expires time.Time

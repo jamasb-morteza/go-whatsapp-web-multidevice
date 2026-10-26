@@ -10,7 +10,7 @@ services:
 #    build:
 #      context: .
 #      dockerfile: ./docker/golang.Dockerfile
-    image: whatsapp-go:reliability-20261026
+    image: whatsapp-go:pair-code-r2-20261026
     restart: "on-failure"
     ports:
       - "3900:3000"

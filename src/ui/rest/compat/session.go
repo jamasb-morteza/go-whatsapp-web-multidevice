@@ -23,6 +23,8 @@ import (
 // meaning for a multi-device-only implementation.
 func (h *Compat) SetSession(c fiber.Ctx) error {
 	var req struct {
+		PairingMethod string  `json:"pairing_method"`
+		PhoneNumber   string  `json:"phone_number"`
 		SessionName   string  `json:"session_name" form:"session_name"`
 		JwtToken      string  `json:"jwt_token" form:"jwt_token"`
 		AppURL        string  `json:"app_url" form:"app_url"`
@@ -37,6 +39,9 @@ func (h *Compat) SetSession(c fiber.Ctx) error {
 	sessionName := strings.TrimSpace(req.SessionName)
 	if sessionName == "" {
 		return nodeResponse(c, fiber.StatusBadRequest, false, "session_name is required", nil)
+	}
+	if req.PairingMethod != "" && req.PairingMethod != "qr" && req.PairingMethod != "code" {
+		return nodeResponse(c, fiber.StatusBadRequest, false, "Invalid pairing method", nil)
 	}
 	appURL := strings.TrimSpace(req.CallbackURL)
 	if appURL == "" {
@@ -79,6 +84,22 @@ func (h *Compat) SetSession(c fiber.Ctx) error {
 		}
 	}
 
+	if req.PairingMethod == "code" {
+		code, err := h.deviceSvc.LoginDeviceWithCode(c.Context(), sessionName, req.PhoneNumber)
+		if errors.Is(err, pkgError.ErrAlreadyLoggedIn) {
+			return alreadyConnected()
+		}
+		if errors.Is(err, pkgError.ErrSessionSaved) {
+			return nodeResponse(c, fiber.StatusAccepted, true, "Session reconnecting.", fiber.Map{"status": "reconnecting", "paired": true, "ready": false})
+		}
+		if err != nil {
+			return nodeResponse(c, fiber.StatusBadGateway, false, "Unable to generate pairing code.", nil)
+		}
+		return nodeResponse(c, fiber.StatusOK, true, "Enter this code on your phone.", fiber.Map{
+			"pair_code": code, "expires_in": 120, "device_id": sessionName,
+			"status": "code_pending", "paired": false, "ready": false,
+		})
+	}
 	login, err := h.deviceSvc.LoginDevice(c.Context(), sessionName)
 	if err != nil {
 		// A device with a stored pairing cannot produce a new QR code; the

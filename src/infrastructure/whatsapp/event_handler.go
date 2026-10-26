@@ -36,7 +36,20 @@ func handler(ctx context.Context, instance *DeviceInstance, rawEvt any) {
 		handleDeleteForMe(ctx, evt, chatStorageRepo, instance.JID(), client)
 	case *events.AppStateSyncComplete:
 		handleAppStateSyncComplete(ctx, client, evt)
+	case *events.PairError:
+		logrus.WithFields(logrus.Fields{
+			"device_id":  instance.ID(),
+			"error_type": fmt.Sprintf("%T", evt.Error),
+		}).Warn("[PAIRING] local handshake failed")
+	case *events.ConnectFailure:
+		logrus.WithFields(logrus.Fields{
+			"device_id": instance.ID(),
+			"reason":    int(evt.Reason),
+		}).Warn("[PAIRING] server rejected connection")
+	case *events.ClientOutdated:
+		logrus.WithField("device_id", instance.ID()).Warn("[PAIRING] client protocol outdated")
 	case *events.PairSuccess:
+		logrus.WithField("device_id", instance.ID()).Info("[PAIRING] handshake succeeded")
 		instance.ClearPasskeyState()
 		handlePairSuccess(ctx, evt)
 	case *events.PairPasskeyRequest:

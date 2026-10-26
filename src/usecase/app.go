@@ -26,6 +26,7 @@ type serviceApp struct {
 	chatStorageRepo domainChatStorage.IChatStorageRepository
 	deviceManager   *whatsapp.DeviceManager
 	pairings        sync.Map
+	phonePairings   sync.Map
 	pairingLocks    [64]sync.Mutex
 }
 
@@ -59,6 +60,12 @@ func (service *serviceApp) Login(ctx context.Context, deviceID string) (domainAp
 		}
 		return domainApp.LoginResponse{}, pkgError.ErrSessionSaved
 	}
+	if _, wasCode := service.phonePairings.LoadAndDelete(deviceID); wasCode {
+		instance, client, err = service.replaceUnpairedClient(ctx, deviceID, instance, client)
+		if err != nil {
+			return domainApp.LoginResponse{}, err
+		}
+	}
 	waitCtx, waitCancel := context.WithTimeout(ctx, 20*time.Second)
 	defer waitCancel()
 	if existing, ok := service.pairings.Load(deviceID); ok {
@@ -77,21 +84,36 @@ func (service *serviceApp) Login(ctx context.Context, deviceID string) (domainAp
 	}
 	operation := newPairingOperation()
 	operation.client = client
+	operation.cancel = cancel
 	service.pairings.Store(deviceID, operation)
 	go func() {
 		defer cancel()
 		defer operation.finish()
 		defer service.pairings.CompareAndDelete(deviceID, operation)
-		for event := range channel {
-			if event.Event != "code" {
-				continue
+		for {
+			select {
+			case <-qrCtx.Done():
+				return
+			case event, ok := <-channel:
+				if !ok {
+					return
+				}
+				// Log only outcome metadata: QR codes and raw errors may contain secrets.
+				logrus.WithFields(logrus.Fields{
+					"device_id":  deviceID,
+					"event":      event.Event,
+					"error_type": fmt.Sprintf("%T", event.Error),
+				}).Info("[PAIRING] QR lifecycle event")
+				if event.Event != "code" {
+					continue
+				}
+				path := fmt.Sprintf("%s/scan-qr-%s.png", config.PathQrCode, fiberUtils.UUIDv4())
+				if err := qrcode.WriteFile(event.Code, qrcode.Medium, 512, path); err != nil {
+					continue
+				}
+				operation.update(domainApp.LoginResponse{Code: event.Code, ImagePath: path}, time.Now().Add(event.Timeout))
+				go func(path string, ttl time.Duration) { time.Sleep(ttl); _ = os.Remove(path) }(path, event.Timeout)
 			}
-			path := fmt.Sprintf("%s/scan-qr-%s.png", config.PathQrCode, fiberUtils.UUIDv4())
-			if err := qrcode.WriteFile(event.Code, qrcode.Medium, 512, path); err != nil {
-				continue
-			}
-			operation.update(domainApp.LoginResponse{Code: event.Code, ImagePath: path}, time.Now().Add(event.Timeout))
-			go func(path string, ttl time.Duration) { time.Sleep(ttl); _ = os.Remove(path) }(path, event.Timeout)
 		}
 	}()
 	if err := client.Connect(); err != nil {
@@ -102,38 +124,53 @@ func (service *serviceApp) Login(ctx context.Context, deviceID string) (domainAp
 	return operation.wait(waitCtx)
 }
 
-func (service *serviceApp) LoginWithCode(ctx context.Context, deviceID string, phoneNumber string) (loginCode string, err error) {
-	if err = validations.ValidateLoginWithCode(ctx, phoneNumber); err != nil {
-		logrus.Errorf("Error when validate login with code: %s", err.Error())
-		return loginCode, err
-	}
-
-	instance, client, err := service.ensureClient(ctx, deviceID)
-	if err != nil {
-		return loginCode, err
-	}
-
-	if client.IsLoggedIn() {
-		instance.UpdateStateFromClient()
-		return loginCode, pkgError.ErrAlreadyLoggedIn
-	}
-
-	// Connect before requesting pairing code.
-	if !client.IsConnected() {
-		if err = client.Connect(); err != nil {
-			return loginCode, err
+func (service *serviceApp) replaceUnpairedClient(ctx context.Context, deviceID string, instance *whatsapp.DeviceInstance, client *whatsmeow.Client) (*whatsapp.DeviceInstance, *whatsmeow.Client, error) {
+	// Pairing timers belong to the old client. A fresh unlinked client prevents
+	// their eventual Disconnect from interrupting the newly selected method.
+	if operation, ok := service.pairings.LoadAndDelete(deviceID); ok {
+		if cancel := operation.(*pairingOperation).cancel; cancel != nil {
+			cancel()
 		}
 	}
+	client.Disconnect()
+	instance.SetClient(nil)
+	return service.ensureClient(ctx, deviceID)
+}
 
-	logrus.Infof("[LOGIN_CODE][%s] Starting phone pairing for number: %s", deviceID, phoneNumber)
+func (service *serviceApp) LoginWithCode(ctx context.Context, deviceID string, phoneNumber string) (loginCode string, err error) {
+	if err = validations.ValidateLoginWithCode(ctx, phoneNumber); err != nil {
+		return "", err
+	}
+	hash := fnv.New32a()
+	_, _ = hash.Write([]byte(deviceID))
+	lock := &service.pairingLocks[hash.Sum32()%64]
+	lock.Lock()
+	defer lock.Unlock()
+	instance, client, err := service.ensureClient(ctx, deviceID)
+	if err != nil {
+		return "", err
+	}
+	if client.IsLoggedIn() {
+		return "", pkgError.ErrAlreadyLoggedIn
+	}
+	if client.Store != nil && client.Store.ID != nil {
+		return "", pkgError.ErrSessionSaved
+	}
+	service.phonePairings.Delete(deviceID)
+	instance, client, err = service.replaceUnpairedClient(ctx, deviceID, instance, client)
+	if err != nil {
+		return "", err
+	}
+	if err = client.Connect(); err != nil {
+		return "", err
+	}
 	loginCode, err = client.PairPhone(ctx, phoneNumber, true, whatsmeow.PairClientChrome, "Chrome (Linux)")
 	if err != nil {
-		logrus.Errorf("Error when pairing phone: %s", err.Error())
-		return loginCode, err
+		return "", err
 	}
-
+	service.phonePairings.Store(deviceID, true)
 	instance.UpdateStateFromClient()
-	logrus.Infof("Successfully paired phone with code: %s", loginCode)
+	logrus.WithField("device_id", deviceID).Info("[PAIRING] phone code generated")
 	return loginCode, nil
 }
 
