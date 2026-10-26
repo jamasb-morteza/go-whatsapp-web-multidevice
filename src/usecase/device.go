@@ -47,7 +47,7 @@ func (s *serviceDevice) GetDevice(_ context.Context, deviceID string) (*domainDe
 		device := convertInstance(inst)
 		return &device, nil
 	}
-	return nil, fmt.Errorf("device %s not found", deviceID)
+	return nil, pkgError.ErrDeviceNotFound
 }
 
 func (s *serviceDevice) AddDevice(ctx context.Context, deviceID string, webhook *chatstorage.DeviceWebhookConfig) (*domainDevice.Device, error) {

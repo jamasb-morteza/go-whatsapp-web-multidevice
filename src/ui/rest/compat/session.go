@@ -142,7 +142,7 @@ func (h *Compat) setDeviceWebhookFromAppURL(ctx context.Context, sessionName, ap
 // sessions answer HTTP 200 with status "disconnected" rather than an error,
 // matching the legacy contract the pollers depend on. The jwt_token's
 // phone_number is matched against the logged-in account: on mismatch the
-// device is logged out and purged, and status "phone_mismatch" is returned.
+// mismatch is reported without deleting pairing credentials.
 func (h *Compat) GetStatus(c fiber.Ctx) error {
 	sessionName, jwtToken := sessionParams(c)
 	allowedPhone := phoneFromJWT(jwtToken)
@@ -199,8 +199,7 @@ func legacyStatusFromDeviceState(state device.DeviceState) string {
 }
 
 // DeleteSession mirrors POST|DELETE /api/v1/social/session/delete. It always
-// answers success like the legacy handler, even when logout of an already-dead
-// session fails, because the local cleanup still removes the session.
+// answers success for absent sessions; local cleanup failures are propagated.
 func (h *Compat) DeleteSession(c fiber.Ctx) error {
 	sessionName, _ := sessionParams(c)
 
@@ -221,8 +220,7 @@ func (h *Compat) DeleteSession(c fiber.Ctx) error {
 
 // purgeSession removes a device the way the legacy service's mismatch pruning
 // did: best-effort WhatsApp logout, then full local deletion. PurgeDevice
-// already performs the unlink, so failures are logged, not propagated — the
-// legacy endpoints answered success regardless.
+// already performs the unlink. Required local cleanup errors are propagated.
 func (h *Compat) purgeSession(c fiber.Ctx, sessionName string) error {
 	if err := h.deviceSvc.LogoutDevice(c.Context(), sessionName); err != nil {
 		logrus.Debugf("[COMPAT] logout during purge of %s failed (continuing): %v", sessionName, err)

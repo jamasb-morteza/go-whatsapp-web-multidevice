@@ -1,6 +1,7 @@
 services:
   # REST API — isolated storage, MCP disabled here
   whatsapp_go:
+    dns: ["8.8.8.8", "1.1.1.1"]
     logging:
       driver: "json-file"
       options:
@@ -9,7 +10,7 @@ services:
 #    build:
 #      context: .
 #      dockerfile: ./docker/golang.Dockerfile
-    image: whatsapp-go-whatsapp_go:latest
+    image: whatsapp-go:reliability-20261025
     restart: "on-failure"
     ports:
       - "3900:3000"
@@ -24,6 +25,7 @@ services:
 
   # MCP — own storage/data, own WhatsApp device (scan its QR at http://localhost:8087)
   whatsapp_mcp:
+    dns: ["8.8.8.8", "1.1.1.1"]
     logging:
       driver: "json-file"
       options:
@@ -32,7 +34,7 @@ services:
 #    build:
 #      context: .
 #      dockerfile: ./docker/golang.Dockerfile
-    image: whatsapp-go-whatsapp_go:latest
+    image: whatsapp-go:v8.6.0
     restart: "on-failure"
     ports:
       - "8087:3000"
